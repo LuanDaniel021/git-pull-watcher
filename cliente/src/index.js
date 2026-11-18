@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const statePath = path.resolve(__dirname, "../.state.json");
+const globalPath = path.resolve(__dirname, "../global.json");
 
 const config = {
   watcherUrl: process.env.WATCHER_URL?.replace(/\/+$/, ""),
@@ -45,6 +46,16 @@ async function saveState(eventId) {
   const temporaryPath = `${statePath}.tmp`;
   await writeFile(temporaryPath, JSON.stringify({ lastEventId: eventId }, null, 2));
   await rename(temporaryPath, statePath);
+}
+
+async function canPull() {
+  const global = JSON.parse(await readFile(globalPath, "utf8"));
+
+  if (typeof global.pull !== "boolean") {
+    throw new Error('A propriedade "pull" em global.json deve ser true ou false.');
+  }
+
+  return global.pull;
 }
 
 async function poll(lastEventId) {
@@ -100,6 +111,11 @@ async function main() {
 
   while (true) {
     try {
+      if (!(await canPull())) {
+        await sleep(config.pollInterval);
+        continue;
+      }
+
       const result = await poll(lastEventId);
 
       if (result.update && result.event) {
