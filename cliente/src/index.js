@@ -93,6 +93,7 @@ async function main() {
 
   const state = await loadState();
   let lastEventId = state.lastEventId;
+  let previousPullState;
 
   console.log("Git Pull Watcher Client iniciado.");
   console.log(`Servidor: ${config.watcherUrl}`);
@@ -101,7 +102,19 @@ async function main() {
 
   while (true) {
     try {
-      if (!(await canPull())) {
+      const pullEnabled = await canPull();
+
+      if (previousPullState !== undefined && pullEnabled !== previousPullState) {
+        console.log(
+          pullEnabled
+            ? "\nEstado do pull alterado: ATIVADO."
+            : "\nEstado do pull alterado: DESATIVADO."
+        );
+      }
+
+      previousPullState = pullEnabled;
+
+      if (!pullEnabled) {
         await sleep(config.pollInterval);
         continue;
       }
