@@ -117,7 +117,7 @@ async function processEventQueue() {
         continue;
       }
 
-      console.log("\\nNova atualização recebida.");
+      console.log("\nNova atualização recebida.");
       console.log("Repositório: " + (event.repository || "não informado"));
       console.log("Commit: " + event.id);
 
@@ -269,7 +269,7 @@ function shutdown(signal) {
   if (shuttingDown) return;
 
   shuttingDown = true;
-  console.log("\\nRecebido " + signal + ". Encerrando cliente...");
+  console.log("\nRecebido " + signal + ". Encerrando cliente...");
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
 
