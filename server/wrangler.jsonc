@@ -9,5 +9,19 @@
       "binding": "WATCHER_KV",
       "id": "604276b9a4db4c998f229f5b74e063fd"
     }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "WATCHER_HUB",
+        "class_name": "WatcherHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["WatcherHub"]
+    }
   ]
 }
