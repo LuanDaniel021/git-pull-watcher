@@ -1,11 +1,11 @@
-import "dotenv/config";
-import WebSocket from "ws";
-import { spawn } from "node:child_process";
-import { readFile, writeFile, rename } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+require("dotenv").config();
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WebSocket = require("ws");
+const { spawn } = require("child_process");
+const fs = require("fs").promises;
+const path = require("path");
+const { URL } = require("url");
+
 const statePath = path.resolve(__dirname, "../.state.json");
 
 const config = {
@@ -19,7 +19,6 @@ const config = {
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 const HEARTBEAT_INTERVAL_MS = 30000;
-const HEARTBEAT_TIMEOUT_MS = 10000;
 
 let lastEventId = null;
 let activeSocket = null;
@@ -39,18 +38,18 @@ function validateConfig() {
   if (!config.repositoryPath) missing.push("REPOSITORY_PATH");
 
   if (missing.length) {
-    throw new Error(`Variáveis ausentes no .env: ${missing.join(", ")}`);
+    throw new Error("Variáveis ausentes no .env: " + missing.join(", "));
   }
 
   const parsedUrl = new URL(config.watcherUrl);
-  if (!["http:", "https:", "ws:", "wss:"].includes(parsedUrl.protocol)) {
+  if (["http:", "https:", "ws:", "wss:"].indexOf(parsedUrl.protocol) === -1) {
     throw new Error("WATCHER_URL deve usar HTTP(S) ou WS(S).");
   }
 }
 
 async function loadState() {
   try {
-    const state = JSON.parse(await readFile(statePath, "utf8"));
+    const state = JSON.parse(await fs.readFile(statePath, "utf8"));
     return { lastEventId: state.lastEventId || null };
   } catch (error) {
     if (error.code === "ENOENT") return { lastEventId: null };
@@ -59,9 +58,9 @@ async function loadState() {
 }
 
 async function saveState(eventId) {
-  const temporaryPath = `${statePath}.tmp`;
-  await writeFile(temporaryPath, JSON.stringify({ lastEventId: eventId }, null, 2));
-  await rename(temporaryPath, statePath);
+  const temporaryPath = statePath + ".tmp";
+  await fs.writeFile(temporaryPath, JSON.stringify({ lastEventId: eventId }, null, 2));
+  await fs.rename(temporaryPath, statePath);
 }
 
 function createWebSocketUrl() {
@@ -88,13 +87,13 @@ function runGitPull() {
     child.once("error", reject);
     child.once("close", code => {
       if (code === 0) resolve();
-      else reject(new Error(`git pull terminou com código ${code}`));
+      else reject(new Error("git pull terminou com código " + code));
     });
   });
 }
 
 function enqueueEvent(event) {
-  if (!event?.id || event.id === lastEventId || queuedEventIds.has(event.id)) {
+  if (!event || !event.id || event.id === lastEventId || queuedEventIds.has(event.id)) {
     return;
   }
 
@@ -118,9 +117,9 @@ async function processEventQueue() {
         continue;
       }
 
-      console.log("\nNova atualização recebida.");
-      console.log(`Repositório: ${event.repository || "não informado"}`);
-      console.log(`Commit: ${event.id}`);
+      console.log("\\nNova atualização recebida.");
+      console.log("Repositório: " + (event.repository || "não informado"));
+      console.log("Commit: " + event.id);
 
       try {
         await runGitPull();
@@ -132,13 +131,13 @@ async function processEventQueue() {
 
         console.log("Repositório atualizado com sucesso.");
       } catch (error) {
-        console.error(`Falha ao atualizar o repositório: ${error.message}`);
+        console.error("Falha ao atualizar o repositório: " + error.message);
         console.error("A conexão será reiniciada para tentar recuperar o evento.");
 
         eventQueue.length = 0;
         queuedEventIds.clear();
 
-        if (activeSocket?.readyState === WebSocket.OPEN) {
+        if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
           activeSocket.close(1011, "git pull failed");
         }
         break;
@@ -155,7 +154,7 @@ function scheduleReconnect() {
   const delay = reconnectDelay;
   reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
 
-  console.log(`Nova tentativa de conexão em ${Math.ceil(delay / 1000)}s.`);
+  console.log("Nova tentativa de conexão em " + Math.ceil(delay / 1000) + "s.");
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null;
@@ -167,19 +166,19 @@ function connect() {
   if (shuttingDown) return;
 
   const url = createWebSocketUrl();
-  console.log(`Conectando ao servidor: ${url.origin}`);
+  console.log("Conectando ao servidor: " + url.origin);
 
   let socket;
 
   try {
-    socket = new WebSocket(url, {
+    socket = new WebSocket(url.toString(), {
       headers: {
-        Authorization: `Bearer ${config.token}`
+        Authorization: "Bearer " + config.token
       },
       handshakeTimeout: 10000
     });
   } catch (error) {
-    console.error(`Não foi possível iniciar o WebSocket: ${error.message}`);
+    console.error("Não foi possível iniciar o WebSocket: " + error.message);
     scheduleReconnect();
     return;
   }
@@ -212,7 +211,7 @@ function connect() {
 
     try {
       message = JSON.parse(rawMessage.toString());
-    } catch {
+    } catch (error) {
       console.error("Mensagem inválida recebida do servidor.");
       return;
     }
@@ -233,7 +232,7 @@ function connect() {
   });
 
   socket.on("error", error => {
-    console.error(`Erro na conexão WebSocket: ${error.message}`);
+    console.error("Erro na conexão WebSocket: " + error.message);
   });
 
   socket.on("close", (code, reason) => {
@@ -245,9 +244,8 @@ function connect() {
 
     if (shuttingDown) return;
 
-    console.log(
-      `Conexão encerrada (código ${code}${reason.length ? `, ${reason.toString()}` : ""}).`
-    );
+    const reasonText = reason && reason.length ? ", " + reason.toString() : "";
+    console.log("Conexão encerrada (código " + code + reasonText + ").");
 
     scheduleReconnect();
   });
@@ -260,9 +258,9 @@ async function main() {
   lastEventId = state.lastEventId;
 
   console.log("Git Pull Watcher Client iniciado.");
-  console.log(`Servidor: ${config.watcherUrl}`);
-  console.log(`Repositório local: ${config.repositoryPath}`);
-  console.log(`Último evento processado: ${lastEventId || "nenhum"}`);
+  console.log("Servidor: " + config.watcherUrl);
+  console.log("Repositório local: " + config.repositoryPath);
+  console.log("Último evento processado: " + (lastEventId || "nenhum"));
 
   connect();
 }
@@ -271,11 +269,11 @@ function shutdown(signal) {
   if (shuttingDown) return;
 
   shuttingDown = true;
-  console.log(`\nRecebido ${signal}. Encerrando cliente...`);
+  console.log("\\nRecebido " + signal + ". Encerrando cliente...");
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
 
-  if (activeSocket?.readyState === WebSocket.OPEN) {
+  if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
     activeSocket.close(1000, "client shutdown");
   } else if (activeSocket) {
     activeSocket.terminate();
