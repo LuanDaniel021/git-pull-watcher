@@ -45,7 +45,7 @@ git-pull-watcher/
 
 ## Requisitos
 
-- Node.js 18 ou superior no computador que executará o cliente.
+- Node.js 12 ou superior no computador que executará o cliente.
 - Git instalado e disponível no PATH.
 - Um repositório local já clonado e configurado com o remoto.
 - Uma conta Cloudflare para hospedar o Worker.
