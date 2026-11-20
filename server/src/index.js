@@ -22,6 +22,15 @@ function safeEqual(a, b) {
   return mismatch === 0;
 }
 
+function isAuthorized(request, env) {
+  const authorization = request.headers.get("authorization") || "";
+  const token = authorization.startsWith("Bearer ")
+    ? authorization.slice(7)
+    : "";
+
+  return Boolean(env.CLIENT_TOKEN) && safeEqual(token, env.CLIENT_TOKEN);
+}
+
 async function verifyGitHubSignature(body, signature, secret) {
   if (!signature?.startsWith("sha256=") || !secret) return false;
 
@@ -46,13 +55,19 @@ async function verifyGitHubSignature(body, signature, secret) {
   return safeEqual(signature, expected);
 }
 
-function isAuthorized(request, env) {
-  const authorization = request.headers.get("authorization") || "";
-  const token = authorization.startsWith("Bearer ")
-    ? authorization.slice(7)
-    : "";
+async function broadcastEvent(event, env) {
+  const id = env.WATCHER_HUB.idFromName("global");
+  const hub = env.WATCHER_HUB.get(id);
 
-  return Boolean(env.CLIENT_TOKEN) && safeEqual(token, env.CLIENT_TOKEN);
+  const response = await hub.fetch("https://watcher-hub/broadcast", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(event)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Falha ao notificar clientes WebSocket: HTTP ${response.status}`);
+  }
 }
 
 async function receiveWebhook(request, env) {
@@ -86,6 +101,8 @@ async function receiveWebhook(request, env) {
   };
 
   await env.WATCHER_KV.put("latest-event", JSON.stringify(event));
+  await broadcastEvent(event, env);
+
   return json({ accepted: true, event });
 }
 
@@ -103,12 +120,32 @@ async function poll(request, env) {
   return json({ update: true, event: latest });
 }
 
+async function connectWebSocket(request, env) {
+  if (!isAuthorized(request, env)) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+    return json({ error: "websocket_upgrade_required" }, 426);
+  }
+
+  const id = env.WATCHER_HUB.idFromName("global");
+  const hub = env.WATCHER_HUB.get(id);
+
+  return hub.fetch(request);
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
 
     if (request.method === "GET" && url.pathname === "/") {
-      return json({ name: "git-pull-watcher", status: "online", version: "0.1.0" });
+      return json({
+        name: "git-pull-watcher",
+        status: "online",
+        version: "0.2.0",
+        transports: ["http", "websocket"]
+      });
     }
 
     if (request.method === "GET" && url.pathname === "/health") {
@@ -123,6 +160,97 @@ export default {
       return poll(request, env);
     }
 
+    if (request.method === "GET" && url.pathname === "/ws") {
+      return connectWebSocket(request, env);
+    }
+
     return json({ error: "not_found" }, 404);
   }
 };
+
+export class WatcherHub {
+  constructor(ctx, env) {
+    this.ctx = ctx;
+    this.env = env;
+  }
+
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (request.method === "POST" && url.pathname === "/broadcast") {
+      let event;
+      try {
+        event = await request.json();
+      } catch {
+        return json({ error: "invalid_json" }, 400);
+      }
+
+      if (!event?.id) {
+        return json({ error: "invalid_event" }, 400);
+      }
+
+      await this.ctx.storage.put("latest-event", event);
+
+      const message = JSON.stringify({ type: "update", event });
+      let delivered = 0;
+
+      for (const socket of this.ctx.getWebSockets()) {
+        try {
+          socket.send(message);
+          delivered++;
+        } catch {
+          socket.close(1011, "Delivery failed");
+        }
+      }
+
+      return json({ delivered });
+    }
+
+    if (request.method === "GET" && url.pathname === "/ws") {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+
+      this.ctx.acceptWebSocket(server);
+
+      server.send(JSON.stringify({ type: "connected" }));
+
+      const after = url.searchParams.get("after");
+      const latest = await this.ctx.storage.get("latest-event")
+        || await this.env.WATCHER_KV.get("latest-event", "json");
+
+      if (latest && latest.id !== after) {
+        server.send(JSON.stringify({ type: "update", event: latest }));
+      }
+
+      return new Response(null, {
+        status: 101,
+        webSocket: client
+      });
+    }
+
+    return json({ error: "not_found" }, 404);
+  }
+
+  async webSocketMessage(socket, message) {
+    if (typeof message !== "string") return;
+
+    let data;
+    try {
+      data = JSON.parse(message);
+    } catch {
+      return;
+    }
+
+    if (data.type === "ping") {
+      socket.send(JSON.stringify({ type: "pong" }));
+    }
+  }
+
+  async webSocketClose() {}
+
+  async webSocketError(socket) {
+    try {
+      socket.close(1011, "WebSocket error");
+    } catch {}
+  }
+}
