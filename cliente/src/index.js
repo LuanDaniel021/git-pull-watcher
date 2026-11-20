@@ -148,20 +148,6 @@ async function processEventQueue() {
   }
 }
 
-function scheduleReconnect() {
-  if (shuttingDown || reconnectTimer) return;
-
-  const delay = reconnectDelay;
-  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
-
-  console.log("Nova tentativa de conexão em " + Math.ceil(delay / 1000) + "s.");
-
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = null;
-    connect();
-  }, delay);
-}
-
 function connect() {
   if (shuttingDown) return;
 
@@ -249,6 +235,20 @@ function connect() {
 
     scheduleReconnect();
   });
+}
+
+function scheduleReconnect() {
+  if (shuttingDown || reconnectTimer) return;
+
+  const delay = reconnectDelay;
+  reconnectDelay = Math.min(reconnectDelay * 2, RECONNECT_MAX_MS);
+
+  console.log("Nova tentativa de conexão em " + Math.ceil(delay / 1000) + "s.");
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null;
+    connect();
+  }, delay);
 }
 
 async function main() {
