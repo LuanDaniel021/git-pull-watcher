@@ -2,7 +2,7 @@
 
 Atualiza automaticamente um repositório Git local quando o GitHub recebe um novo push.
 
-O projeto usa um **Cloudflare Worker** como intermediário: o GitHub envia um webhook para o servidor, e o cliente local consulta o servidor periodicamente. Quando encontra um evento novo, o cliente executa `git pull --ff-only` no repositório configurado.
+O projeto usa um **Cloudflare Worker** como intermediário e **WebSocket** para manter o cliente local conectado ao servidor. Quando chega um push, o cliente recebe a notificação e executa `git pull --ff-only` no repositório configurado.
 
 ## Arquitetura
 
@@ -11,15 +11,18 @@ GitHub
   │ push (webhook)
   ▼
 Cloudflare Worker
-  │ grava o último evento no KV
+  │ valida o evento e atualiza o estado
+  ▼
+Durable Object (WatcherHub)
+  │ transmite pelo WebSocket
   ▼
 Cliente local
-  │ consulta GET /poll periodicamente
+  │ executa quando recebe um evento
   ▼
 git pull --ff-only
 ```
 
-O GitHub não precisa conhecer o computador local. O cliente é quem inicia as consultas ao servidor.
+O cliente inicia a conexão com o servidor. Não é necessário expor o computador local à internet nem consultar o servidor em intervalos fixos.
 
 ## Estrutura
 
@@ -30,7 +33,8 @@ git-pull-watcher/
 │   │   └── index.js
 │   ├── .env.example
 │   ├── .gitignore
-│   └── package.json
+│   ├── package.json
+│   └── README.md
 └── server/
     ├── src/
     │   └── index.js
@@ -43,25 +47,36 @@ git-pull-watcher/
 
 - Node.js 18 ou superior no computador que executará o cliente.
 - Git instalado e disponível no PATH.
-- Um repositório local já clonado, com acesso ao remoto.
+- Um repositório local já clonado e configurado com o remoto.
 - Uma conta Cloudflare para hospedar o Worker.
 
 ## Configuração
 
 ### 1. Servidor (Cloudflare Worker)
 
-O servidor fica em `server/` e utiliza Cloudflare Workers + Workers KV.
+O servidor fica em `server/` e utiliza:
 
-1. Crie um namespace no **Workers & Pages → KV**.
-2. Configure o binding `WATCHER_KV` no `server/wrangler.jsonc`, usando o ID do namespace criado.
-3. No Worker, abra **Settings → Variables and Secrets** e configure os secrets de runtime:
+- **Cloudflare Workers** para receber os webhooks e expor os endpoints.
+- **Workers KV** para armazenar o evento mais recente.
+- **Durable Objects** (`WatcherHub`) para manter e gerenciar as conexões WebSocket.
+
+No Cloudflare:
+
+1. Mantenha o namespace KV associado ao binding `WATCHER_KV` definido em `server/wrangler.jsonc`.
+2. No Worker, abra **Settings → Variables and Secrets** e configure:
    - `GITHUB_WEBHOOK_SECRET`: segredo usado para validar a assinatura dos webhooks do GitHub.
-   - `CLIENT_TOKEN`: token que autoriza o cliente local a consultar o servidor.
-4. Faça o deploy do Worker.
+   - `CLIENT_TOKEN`: token usado para autenticar o cliente.
+3. Configure o deploy pelo GitHub/Cloudflare Workers Builds:
+   - Repositório: `LuanDaniel021/git-pull-watcher`
+   - Branch de produção: `main`
+   - Root directory: `server`
+   - Install command: `npm install`
+   - Build command: deixe vazio
+   - Deploy command: `npx wrangler deploy`
 
-Para configurar o deploy pelo Cloudflare Workers Builds, use `server` como diretório raiz, `npm install` como comando de instalação e `npx wrangler deploy` como comando de deploy. Não é necessário comando de build.
+O binding `WATCHER_HUB` e a migração do Durable Object já estão declarados em `server/wrangler.jsonc`. O Wrangler aplica a migração durante o deploy.
 
-Consulte [server/README.md](server/README.md) para os detalhes do servidor.
+Consulte [server/README.md](server/README.md) para detalhes dos endpoints e da configuração do Worker.
 
 ### 2. Webhook do GitHub
 
@@ -73,11 +88,11 @@ No repositório que será monitorado:
 4. Informe como Secret o mesmo valor configurado em `GITHUB_WEBHOOK_SECRET` no Cloudflare.
 5. Selecione **Just the push event** e salve.
 
-O webhook deve apontar para o endereço do seu Worker, não para o cliente local.
+O webhook aponta para o Worker, não para o computador que executa o cliente.
 
 ### 3. Cliente local
 
-No computador que deve receber as atualizações, entre na pasta `cliente/`:
+No computador que receberá as atualizações, entre na pasta `cliente/` e instale as dependências:
 
 ```bash
 npm install
@@ -89,13 +104,11 @@ Copie `.env.example` para `.env` e configure:
 WATCHER_URL=https://SEU-WORKER.workers.dev
 CLIENT_TOKEN=seu-token
 REPOSITORY_PATH=C:/caminho/para/o/repositorio
-POLL_INTERVAL_MS=5000
 ```
 
-- `WATCHER_URL`: endereço público do Worker.
-- `CLIENT_TOKEN`: mesmo token configurado como secret no Worker.
-- `REPOSITORY_PATH`: caminho da pasta do repositório que receberá o pull.
-- `POLL_INTERVAL_MS`: intervalo entre consultas, em milissegundos (padrão: 5000; mínimo: 1000).
+- `WATCHER_URL`: endereço HTTP(S) público do Worker. O cliente converte automaticamente para WS(S).
+- `CLIENT_TOKEN`: mesmo token configurado como Secret no Worker.
+- `REPOSITORY_PATH`: caminho da pasta do repositório local que receberá o pull.
 
 Inicie o cliente:
 
@@ -103,36 +116,41 @@ Inicie o cliente:
 npm start
 ```
 
-Mantenha o processo em execução para continuar monitorando o repositório. O arquivo `.env` e o estado local `.state.json` não são versionados.
+Mantenha o processo em execução para continuar recebendo notificações. O arquivo `.env` e o estado local `.state.json` não são versionados.
 
-## Como funciona o fluxo
+Consulte [cliente/README.md](cliente/README.md) para detalhes sobre a conexão e o estado local.
 
-1. Alguém faz push no repositório do GitHub.
-2. O GitHub envia um evento `push` ao endpoint `/github/webhook`.
-3. O Worker valida a assinatura e grava os dados do último push no KV.
-4. O cliente consulta `/poll` usando o `CLIENT_TOKEN`.
-5. Se houver um evento diferente do último processado, o cliente executa `git pull --ff-only`.
-6. Após o pull concluir com sucesso, o cliente salva o ID do evento em `.state.json`.
+## Como funciona
 
-O cliente não imprime cada consulta normal sem atualização. Ele informa inicialização, novas atualizações e erros; a saída do próprio Git também aparece no terminal.
+1. Alguém faz push no repositório monitorado.
+2. O GitHub envia um evento `push` para `POST /github/webhook`.
+3. O Worker valida a assinatura, registra o evento no KV e notifica o `WatcherHub`.
+4. O Durable Object transmite o evento aos clientes conectados.
+5. O cliente executa `git pull --ff-only`.
+6. Depois de um pull bem-sucedido, o cliente salva o ID do evento em `.state.json`.
 
-## Endpoints do servidor
+O cliente mantém a conexão WebSocket aberta, envia mensagens periódicas de heartbeat e tenta reconectar automaticamente quando a conexão cai. Na reconexão, informa o último ID processado para que o servidor possa reenviar o evento mais recente, se necessário.
+
+## Endpoints
 
 | Método | Caminho | Função |
 | --- | --- | --- |
 | `GET` | `/` | Informações e status do serviço |
 | `GET` | `/health` | Verificação de saúde |
 | `POST` | `/github/webhook` | Recebe eventos do GitHub |
-| `GET` | `/poll` | Consulta o último evento (autenticado) |
+| `GET` | `/ws` | Conexão WebSocket autenticada |
+| `GET` | `/poll` | Consulta HTTP do último evento (compatibilidade) |
+
+A conexão WebSocket usa o cabeçalho `Authorization: Bearer <CLIENT_TOKEN>`. O endpoint HTTP `/poll` permanece disponível para compatibilidade com clientes antigos; o cliente atual utiliza WebSocket.
 
 ## Limitações conhecidas
 
-- O KV guarda somente o evento mais recente, não uma fila. Se vários pushes acontecerem antes da próxima consulta, eles podem ser condensados em um único evento.
-- `git pull --ff-only` só atualiza quando o avanço pode ser feito sem merge. Se o repositório local tiver alterações ou divergência que impeçam o avanço, o pull falhará; o cliente registra o erro e tenta novamente nas próximas consultas.
+- O KV e o estado de recuperação mantêm somente o evento mais recente, não uma fila completa. Se vários pushes acontecerem enquanto o cliente estiver desconectado, a recuperação pode trazer apenas o último evento.
+- `git pull --ff-only` não cria merges. Se houver alterações locais ou divergência que impeçam um avanço direto, o pull falhará.
 - O cliente precisa permanecer em execução e ter acesso à internet e ao repositório local.
 
 ## Segurança
 
 - Não publique os valores de `GITHUB_WEBHOOK_SECRET` ou `CLIENT_TOKEN`.
 - Não envie o arquivo `.env` para o Git.
-- Use tokens diferentes para ambientes ou instalações diferentes, se necessário.
+- Configure os tokens como Secrets no Cloudflare, não como valores escritos no código.
