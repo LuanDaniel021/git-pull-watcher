@@ -9,7 +9,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const statePath = path.resolve(__dirname, "../.state.json");
 
 const config = {
-  watcherUrl: process.env.WATCHER_URL?.replace(/\\/+$/, ""),
+  watcherUrl: process.env.WATCHER_URL,
   token: process.env.CLIENT_TOKEN,
   repositoryPath: process.env.REPOSITORY_PATH
     ? path.resolve(process.env.REPOSITORY_PATH)
