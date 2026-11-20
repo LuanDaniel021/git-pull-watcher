@@ -2,6 +2,12 @@
 
 Cliente local do Git Pull Watcher. Mantém uma conexão WebSocket com o servidor e executa `git pull --ff-only` quando recebe um novo evento push.
 
+## Requisitos
+
+- Node.js 12 ou superior.
+- Git instalado e disponível no PATH.
+- Um repositório local já clonado e configurado com o remoto.
+
 ## Configuração
 
 Crie um arquivo `.env` com:
@@ -23,7 +29,7 @@ npm install
 npm start
 ```
 
-O cliente requer Node.js 18 ou superior.
+O cliente usa CommonJS para manter compatibilidade com Node.js 12, sem exigir suporte a módulos ES nativos.
 
 ## Funcionamento
 
@@ -43,7 +49,7 @@ O arquivo `.state.json` é criado automaticamente dentro do diretório `cliente`
 
 ## Observações
 
-- O cliente não usa mais polling nem `POLL_INTERVAL_MS`.
+- O cliente não usa polling nem `POLL_INTERVAL_MS`.
 - O endpoint HTTP `/poll` continua existindo no servidor para compatibilidade com clientes antigos.
 - O servidor armazena somente o evento mais recente. Portanto, se vários pushes ocorrerem enquanto o cliente estiver desconectado, a recuperação pode trazer apenas o último evento.
 - O repositório local precisa estar configurado para que `git pull --ff-only` funcione sem interação manual.
